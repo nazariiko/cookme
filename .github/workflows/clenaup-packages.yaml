@@ -1,0 +1,18 @@
+on:
+  schedule:
+    - cron: 0 0 * * * # At the end of every day
+
+name: Delete Draft Packages
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete drafts Packages
+        uses: actions/delete-package-versions@v4
+        with:
+          package-name: 'cookme'
+          package-type: 'container'
+          min-versions-to-keep: 5
+          # delete-only-untagged-versions: 'true'

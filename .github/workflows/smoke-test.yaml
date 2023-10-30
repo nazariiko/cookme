@@ -1,0 +1,67 @@
+name: Smoke Test
+
+on:
+  push:
+    branches: ["server/**"]
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # need checkout before using compose-action
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.COOKME_GITHUB_WORKFLOW_TOKEN }}
+
+      - name: Build the APP stack
+        run: |
+          docker-compose -f .github/docker-compose.ci.yaml up -d
+          # curl -I --retry 5 --retry-max-time 120 http://localhost:3001/
+          # docker run -d --name my-service my-service
+          # docker run --network container:my-service appropriate/curl --retry 10 --retry-connrefused http://localhost:8080/healthcheck
+
+      - name: Perform Health Check
+        uses: cygnetdigital/wait_for_response@v2.0.0
+        with:
+          url: "http://localhost:3001/"
+          timeout: 360000 # timeout 6 min
+          interval: 20000 # 20 sec
+
+      - name: Dump docker logs on failure
+        if: failure()
+        uses: jwalton/gh-docker-logs@v2
+        with:
+          dest: logs
+
+      - name: Collect logs
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-logs
+          path: logs
+        # env:
+        #   POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+        #   POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        #   PGADMIN_DEFAULT_EMAIL: ${{ secrets.PGADMIN_DEFAULT_EMAIL }}
+        #   PGADMIN_DEFAULT_PASSWORD: ${{ secrets.PGADMIN_DEFAULT_PASSWORD }}
+        #
+      # - name: Build the stack
+      #   uses: adrielcodeco/docker-compose-run-action@v1
+      #   with:
+      #     compose-file: ".github/docker-compose.ci.yaml"
+      #     service: cookmeapp #service name from docker-compose.ci.yaml
+      #   env:
+      #     MY_VARIABLE: "test"

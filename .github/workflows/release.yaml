@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      deployment-environment:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      cleanup-artifacts:
+        required: false
+        type: boolean
+    # outputs:
+    #   release-id:
+    #     description: Release ID
+    #     value: ${{ jobs.release.outputs.release-id }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.deployment-environment }}
+
+    outputs:
+      release-id: ${{ env.RELEASE_ID }}
+
+    env:
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment-environment }}
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: release-artifacts
+
+      - name: List Artifacts
+        id: artifacts-list
+        run: |
+          echo 'ARTIFACTS_LIST<<EOF' >> $GITHUB_ENV
+          find release-artifacts -type f -follow -print >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - name: Archive Artifacts
+        id: archive-artifacts
+        run: |
+          mkdir release-assets
+          cd release-artifacts
+          for i in */; do (cd "$i"; zip -r "../../release-assets/${i%/}.zip" .); done
+          cd -
+
+      - name: Cleanup Artifacts
+        if: ${{ github.event.inputs.cleanup-artifacts == 'true' }}
+        uses: geekyeggo/delete-artifact@v1
+        with:
+          name: ${{ env.ARTIFACTS_LIST }}
+
+      - name: List Assets
+        id: assets-list
+        run: |
+          echo 'ASSETS_LIST<<EOF' >> $GITHUB_ENV
+          find release-assets -type f -follow -print >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
+
+      - id: deployment-environment-string
+        uses: ASzc/change-string-case-action@v5
+        with:
+          string: ${{ env.DEPLOYMENT_ENVIRONMENT }}
+
+      - name: .changelog-config.json exists?
+        id: changelog-config-exists
+        uses: andstor/file-existence-action@v2
+        with:
+          files: ".github/.changelog-config.json"
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Previous Tag
+        id: previous-tag
+        uses: WyriHaximus/github-action-get-previous-tag@v1
+        with:
+          fallback: 0.0.1
+
+      - name: Create changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          fromTag: ${{ steps.previous-tag.outputs.tag }}
+          toTag: ${{ github.sha }}
+          configuration: ".github/.changelog-config.json"
+        env:
+          GITHUB_TOKEN: ${{ secrets.COOKME_GITHUB_WORKFLOW_TOKEN }}
+
+      - name: Create Draft Release
+        id: release-development
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Development'
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ env.VERSION }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          tag_name: untagged-${{ env.VERSION }}
+          draft: true
+          files: ${{ steps.assets-list.outputs.ASSETS_LIST }}
+
+      - name: Set Output (Development)
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Development'
+        run: echo RELEASE_ID=${{ steps.release-development.outputs.id }} >> $GITHUB_ENV
+
+      - name: Create/Move Tag
+        uses: rickstaa/action-create-tag@v1
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Staging'
+        env:
+          GITHUB_TOKEN: ${{ secrets.COOKME_GITHUB_WORKFLOW_TOKEN }}
+        with:
+          tag: v${{ env.VERSION }}
+          force_push_tag: true
+
+      - name: Release
+        id: release-staging
+        uses: softprops/action-gh-release@v1
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Staging'
+        with:
+          name: v${{ env.VERSION }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          tag_name: v${{ env.VERSION }}
+          prerelease: true
+          files: ${{ steps.assets-list.outputs.ASSETS_LIST }}
+
+      - name: Set Output (Staging)
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Staging'
+        run: echo RELEASE_ID=${{ steps.release-staging.outputs.id }} >> $GITHUB_ENV

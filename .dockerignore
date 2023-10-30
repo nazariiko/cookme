@@ -1,0 +1,31 @@
+# Items that don't need to be in a Docker image.
+# Anything not used by the build system should go here.
+.dockerignore
+.gitignore
+README.md
+.git
+*Dockerfile*
+.env
+# Artifacts that will be built during image creation.
+# This should contain all files created during `npm run build`.
+node_modules
+log
+tmp
+.vscode
+.next
+.github
+.DS_Store
+Documentation
+Upgrade
+!containers/Upgrade
+install-doc
+.env
+.env.production
+# Static directory's and files. Maped with docker-compose as volumes on remote
+/server/public/upload
+# /temporary
+/Docker/db
+image-optimization/*
+playtubevideo.sql
+# server/public/upload/*
+# server/public/resources/*

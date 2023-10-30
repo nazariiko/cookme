@@ -1,0 +1,161 @@
+# Use root/example as user/password credentials
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: mysqldb
+    # NOTE: use of "mysql_native_password" is not recommended: https://dev.mysql.com/doc/refman/8.0/en/upgrading-from-previous-series.html#upgrade-caching-sha2-password
+    # (this is just an example, not intended to be a production configuration)
+    command: --default-authentication-plugin=mysql_native_password
+    cap_add:
+      - SYS_NICE
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=example
+      - MYSQL_DATABASE=cookme-app
+      - MYSQL_USER=localtest
+      - MYSQL_PASSWORD=localtest
+    ports:
+      - '3306:3306'
+    networks:
+      - app_network
+    volumes:
+      - ./db:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin
+    links:
+      - db
+    environment:
+      PMA_HOST: mysqldb
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+      UPLOAD_LIMIT: 100M
+    restart: always
+    ports:
+      # - 8080:80
+      - 80
+    networks:
+      - app_network
+
+  cockmeapp:
+    # image: cookme:1.0.9
+    # image: ghcr.io/gershon-a/cookme:main
+    # image: localhost:5000/cookme:1.0.3
+    # image: ghcr.io/gershon-a/cookme:release-1.0.4
+    # container_name: cockme
+    build: ../.
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+    links:
+      - db
+    depends_on:
+      - db
+    env_file:
+      - ../.env.example
+    # environment:
+    #   - NODE_ENV=production
+    #   - PORT=3000
+    #   - DBUSER=localtest
+    #   - DBPASSWORD=localtest
+    #   - DBNAME=cookme-app
+    #   - DBHOST=mysqldb
+    #   - ADMIN_SLUG=/video-admin
+    #   - DBPORT=3306
+    #   - TZ=utc
+    #   - CDN_URL_FOR_STATIC_RESOURCES=
+    #   - CLOUDFRONT_URL_FOR_STATIC_RESOURCES=https://cdn.cookme.app
+    #   - subFolder=/
+    #   - PUBLIC_URL=http://localhost:3000
+    #   - LOCALADDRESS=127.0.0.1
+    #   - SECRETKEY=playtubevideo
+    #   - JWT_SECRET_KEY=JWT_SECRET_KEY
+    #   - ANTMEDIASERVER=false
+    restart: always
+    ports:
+      # - 3000:3000
+      - 3000
+    networks:
+      - app_network
+    volumes:
+      - ../server/public/upload:/app/server/public/upload
+      - ../temporary:/app/temporary
+      # - ../backups:/app/server/backups
+      - ../public/locales:/app/public/locales
+
+  backendgpt: # service name
+    container_name: backendgpt
+    # name of the image
+    # image: cookme/backend
+    # build the image for the web service from the dockerfile in backend directory.
+    build: ../backend/.
+    # map data and files from parent directory in host to microservice directory in docker container
+    volumes:
+      - .:/usr/src/cook_me_gpt
+    # environment:
+    #   - CSRF_TRUSTED_ORIGINS=http://127.0.0.1
+    command: python manage.py runserver 0.0.0.0:8000
+    # file where env variables are stored. Used as best practice so as not to expose secret keys
+    env_file:
+      - .env # name of the env file
+    ports:
+      # - 8000:8000
+      - 8000
+    restart: "on-failure"
+    depends_on:
+      - nginx
+    networks:
+      - app_network
+
+  nginx:
+    image: nginx
+    ports:
+      - 8888:80
+      - 8080:8080
+      - 8000:8000
+      - 8443:443
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certbot/www:/var/www/certbot/:ro
+    depends_on:
+      - cockmeapp
+    networks:
+      - app_network
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - REGISTRY_AUTH_TOKEN=${REGISTRY_AUTH_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - $HOME/.docker/config.json:/config.json
+    labels:
+      com.centurylinklabs.watchtower.scope: cookme
+    command: --interval 60 --scope cookme
+    env_file:
+      - ../.env
+  cache:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    ports:
+      - '6379:6379'
+    command: redis-server --save 20 1 --loglevel warning --requirepass eYVX7EwVmmxKPCDmwMtyKVge8oLd2t81
+    volumes:
+      - cache:/data
+volumes:
+  cache:
+    driver: local
+networks:
+  app_network:
+# volumes:
+#   db:
+#     driver: local

@@ -1,0 +1,47 @@
+# Use root/example as user/password credentials
+version: "3.6"
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: mysqldb
+    # NOTE: use of "mysql_native_password" is not recommended: https://dev.mysql.com/doc/refman/8.0/en/upgrading-from-previous-series.html#upgrade-caching-sha2-password
+    # (this is just an example, not intended to be a production configuration)
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=example
+      - MYSQL_DATABASE=cookme-app
+      - MYSQL_USER=localtest
+      - MYSQL_PASSWORD=localtest
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./db:/var/lib/mysql
+      - ../Docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  cockmeapp:
+    image: ghcr.io/gershon-a/cookme:release-0.0.1
+    container_name: cockme
+    links:
+      - db
+    depends_on:
+      - db
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DBUSER=localtest
+      - DBPASSWORD=localtest
+      - DBNAME=cookme-app
+      - DBHOST=mysqldb
+      - ADMIN_SLUG=/video-admin
+      - DBPORT=3306
+      - TZ=utc
+      - CDN_URL_FOR_STATIC_RESOURCES=
+      - subFolder=/
+      - PUBLIC_URL=http://localhost:3001
+      - SECRETKEY=playtubevideo
+      - ANTMEDIASERVER=false
+    restart: always
+    ports:
+      - 3001:3000

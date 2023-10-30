@@ -1,0 +1,111 @@
+name: Version
+
+on:
+  workflow_call:
+    inputs:
+      deployment-environment:
+        required: true
+        type: string
+    outputs:
+      version:
+        description: Generated version string for provided deployment environment
+        value: ${{ jobs.generate-version.outputs.version }}
+      major:
+        description: Major version
+        value: ${{ jobs.generate-version.outputs.major }}
+      minor:
+        description: Minor version
+        value: ${{ jobs.generate-version.outputs.minor }}
+      revision:
+        description: Revision
+        value: ${{ jobs.generate-version.outputs.revision }}
+      build:
+        description: Build number
+        value: ${{ jobs.generate-version.outputs.build }}
+
+jobs:
+  generate-version:
+    name: Generate Version
+    runs-on: ubuntu-latest
+
+    env:
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment-environment }}
+
+    outputs:
+      major: ${{ steps.generate-version.outputs.major }}
+      minor: ${{ steps.generate-version.outputs.minor }}
+      revision: ${{ steps.generate-version.outputs.revision }}
+      build: ${{ steps.generate-version.outputs.build }}
+      version: ${{ steps.generate-version.outputs.version }}
+
+    steps:
+      - name: Print Target Environment
+        run: echo 'Generating version for ${{ env.DEPLOYMENT_ENVIRONMENT }}...'
+
+      - name: Checkout
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Development'
+        uses: actions/checkout@v3
+
+      - name: Developmment
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Development'
+        # Format: <last-tag>-<commits-number>-g<hash>
+        run: echo VERSION=$(git fetch --prune --unshallow && git describe --tags) >> $GITHUB_ENV
+
+      - name: Developmment - No Tags
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Development' && env.VERSION == ''
+        # Take care of an new repo without tags and step aboves returns nothing
+        run: echo VERSION=0.0.0-${{ github.event.pull_request.number || 1 }}-g${GITHUB_SHA::8} >> $GITHUB_ENV
+
+      - name: Staging
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Staging'
+        # Format: <release-branch-name>
+        run: echo VERSION=${GITHUB_REF##*/} >> $GITHUB_ENV
+
+      - name: Production
+        if: env.DEPLOYMENT_ENVIRONMENT == 'Production'
+        # Format: <tag-name>
+        run: echo VERSION=${{ github.event.release.tag_name }} >> $GITHUB_ENV
+
+      - name: Remove leading prefix
+        id: remove-leading-prefix
+        if: startsWith(${{ env.VERSION }}, 'v')
+        run: echo VERSION=${{ env.VERSION }} | sed 's/v//g' >> $GITHUB_ENV
+
+      - name: Replace Version Hyphens
+        id: version-dots
+        uses: frabert/replace-string-action@v2.4
+        with:
+          pattern: "-"
+          string: "${{ env.VERSION }}"
+          replace-with: "."
+
+      - name: Split
+        uses: actions/github-script@v6
+        id: split
+        with:
+          result-encoding: string
+          script: return JSON.stringify('${{ steps.version-dots.outputs.replaced }}'.split('.'));
+
+      - name: Breakdown Version
+        run: |
+          echo VERSION_MAJOR=$(echo ${{ fromJSON(steps.split.outputs.result)[0] }} | sed 's/[^0-9]*//g') >> $GITHUB_ENV
+          echo VERSION_MINOR=$(echo ${{ fromJSON(steps.split.outputs.result)[1] }} | sed 's/[^0-9]*//g') >> $GITHUB_ENV
+          echo VERSION_REVISION=$(echo ${{ fromJSON(steps.split.outputs.result)[2] }} | sed 's/[^0-9]*//g') >> $GITHUB_ENV
+          echo VERSION_BUILD=${{ fromJSON(steps.split.outputs.result)[3] }} >> $GITHUB_ENV
+
+      - name: Fix Empty Build #
+        if: env.VERSION_BUILD == ''
+        run: echo VERSION_BUILD=${GITHUB_SHA::7} >> $GITHUB_ENV
+
+      - name: replace build version to PR number for non-development versions #
+        if: env.DEPLOYMENT_ENVIRONMENT != 'Development'
+        run: echo VERSION_BUILD=${{ github.run_number }} >> $GITHUB_ENV
+
+      - id: generate-version
+        name: Generate Version
+        run: |
+          echo major=${{ env.VERSION_MAJOR }}       >> $GITHUB_OUTPUT
+          echo minor=${{ env.VERSION_MINOR }}       >> $GITHUB_OUTPUT
+          echo revision=${{ env.VERSION_REVISION }} >> $GITHUB_OUTPUT
+          echo build=${{ env.VERSION_BUILD }}       >> $GITHUB_OUTPUT
+          echo version=${{ env.VERSION }}           >> $GITHUB_OUTPUT

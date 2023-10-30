@@ -1,0 +1,162 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - "main" # Development
+      - "release/**" # Staging
+  release: # Production
+    types: [published]
+
+jobs:
+  get-environment:
+    name: Get Environment
+    uses: Gershon-A/cookme/.github/workflows/environment.yaml@main
+
+  generate-version:
+    name: Generate Version
+    needs: get-environment
+    if: ${{ needs.get-environment.outputs.deployment-environment != '' }}
+    uses: Gershon-A/cookme/.github/workflows/version.yaml@main
+    with:
+      deployment-environment: ${{ needs.get-environment.outputs.deployment-environment }}
+
+  ci-build:
+    runs-on: ubuntu-latest
+    needs: [get-environment, generate-version]
+    if: ${{ needs.generate-version.outputs.version != '' }}
+    env:
+      DEPLOYMENT_ENVIRONMENT: ${{ needs.get-environment.outputs.deployment-environment }}
+      VERSION: ${{ needs.generate-version.outputs.version }}
+
+    strategy:
+      matrix:
+        node-version: [16.x]
+    steps:
+      - name: SCM
+        uses: actions/checkout@v3
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Cache node modules
+        id: cache-npm
+        uses: actions/cache@v3
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: |
+            ~/.npm
+            **/node_modules
+            **/.eslintcache
+            ./node_modules # Add the path to your project's node_modules directory
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}-
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm install --production --only=production
+
+      - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
+        name: List the state of node modules
+        continue-on-error: true
+        run: npm list
+
+      - name: Build
+        env:
+          subFolder: "/"
+        run: npm run build
+
+      - uses: actions/upload-artifact@v3
+        with:
+          retention-days: 3
+          name: build
+          path: |
+            # public
+            # pages
+            # components
+            # containers
+            # hoc
+            # store
+            .next
+
+  push-image:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: [get-environment, generate-version, ci-build]
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      DEPLOYMENT_ENVIRONMENT: ${{ needs.get-environment.outputs.deployment-environment }}
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository }}
+      BACKEND_IMAGE_NAME: ${{ github.repository }}-backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.COOKME_GITHUB_WORKFLOW_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for CookmeApp Docker
+        id: cookmeapp
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Extract metadata (tags, labels) for CookmeApp backend Docker
+        id: backend
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push CookMe APP Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
+          push: true
+          tags: ${{ steps.cookmeapp.outputs.tags }}
+          labels: ${{ steps.cookmeapp.outputs.labels }}
+
+      - name: Build and push CookMe GPT Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: backend/.
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
+          push: true
+          tags: ${{ steps.backend.outputs.tags }}
+          labels: ${{ steps.backend.outputs.labels }}
+
+  release:
+    name: Release
+    needs: [get-environment, generate-version, ci-build, push-image]
+    permissions: write-all
+    # permissions:
+    #   contents: write
+    #   packages: write
+    #   repository-projects: write
+    #   actions: write
+
+    uses: Gershon-A/cookme/.github/workflows/release.yaml@main
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release')
+    with:
+      deployment-environment: ${{ needs.get-environment.outputs.deployment-environment }}
+      version: ${{ needs.generate-version.outputs.version }}
+      cleanup-artifacts: true
